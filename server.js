@@ -4,21 +4,35 @@ const multer = require('multer');
 const path = require('path');
 const cors = require('cors');
 const fs = require('fs');
-const bcrypt = require('bcryptjs'); // Thêm package cho mã hóa mật khẩu
-const jwt = require('jsonwebtoken'); // Thêm package cho JWT
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const JWT_SECRET = process.env.JWT_SECRET || 'bookstore_jwt_secret'; // Khóa bí mật JWT
+const JWT_SECRET = 'bookstore_jwt_secret';
 
-// Middleware
+// Middleware CORS với cấu hình cụ thể
 app.use(cors({
-  origin: 'http://localhost:3000', // Đảm bảo khớp với URL của React app
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization'] // Thêm Authorization vào allowedHeaders
+  origin: ['https://book-web-pi.vercel.app', 'http://localhost:3000'],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'Accept']
 }));
+
 app.use(express.json());
-app.use('/uploads', express.static('uploads')); // Phục vụ file tĩnh
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', 'https://book-web-pi.vercel.app');
+  res.header('Access-Control-Allow-Credentials', true);
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  next();
+});
+
+// Cấu hình static files
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Cấu hình multer
 const storage = multer.diskStorage({
@@ -26,7 +40,7 @@ const storage = multer.diskStorage({
     cb(null, 'uploads/');
   },
   filename: (req, file, cb) => {
-    cb(null, Date.now() + path.extname(file.originalname)); 
+    cb(null, Date.now() + path.extname(file.originalname));
   }
 });
 const upload = multer({ storage });
@@ -36,16 +50,18 @@ if (!fs.existsSync('uploads')) {
   fs.mkdirSync('uploads');
 }
 
-// MongoDB connection
+// MongoDB connection - sử dụng connection string trực tiếp
 const mongoURI = 'mongodb+srv://truongvinhkha:kha123@books-data.uqjrvey.mongodb.net/?retryWrites=true&w=majority&appName=Books-data';
-mongoose.connect(mongoURI, { 
-  useNewUrlParser: true, 
-  useUnifiedTopology: true 
+mongoose.connect(mongoURI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+  serverSelectionTimeoutMS: 5000,
+  socketTimeoutMS: 45000,
 })
   .then(() => console.log('MongoDB connected successfully'))
   .catch(err => {
     console.error('MongoDB connection error:', err);
-    process.exit(1); // Thoát nếu không kết nối được
+    process.exit(1);
   });
 
 // Định nghĩa schema sách
@@ -76,11 +92,11 @@ const User = mongoose.model('User', userSchema);
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
-  
+
   if (!token) {
     return res.status(401).json({ message: 'Không có token xác thực' });
   }
-  
+
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) {
       return res.status(403).json({ message: 'Token không hợp lệ hoặc đã hết hạn' });
@@ -94,33 +110,33 @@ const authenticateToken = (req, res, next) => {
 app.post('/api/register', async (req, res) => {
   try {
     const { username, email, password } = req.body;
-    
+
     // Kiểm tra người dùng đã tồn tại chưa
     const existingUser = await User.findOne({ $or: [{ username }, { email }] });
     if (existingUser) {
       return res.status(400).json({ message: 'Username hoặc email đã tồn tại' });
     }
-    
+
     // Mã hóa mật khẩu
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
-    
+
     // Tạo người dùng mới
     const newUser = new User({
       username,
       email,
       password: hashedPassword
     });
-    
+
     await newUser.save();
-    
+
     // Tạo JWT token
     const token = jwt.sign(
       { userId: newUser._id, username: newUser.username, role: newUser.role },
       JWT_SECRET,
       { expiresIn: '24h' } // Token hết hạn sau 24 giờ
     );
-    
+
     res.status(201).json({
       message: 'Đăng ký thành công',
       token,
@@ -141,26 +157,26 @@ app.post('/api/register', async (req, res) => {
 app.post('/api/login', async (req, res) => {
   try {
     const { username, password } = req.body;
-    
+
     // Tìm người dùng
     const user = await User.findOne({ username });
     if (!user) {
       return res.status(400).json({ message: 'Tên đăng nhập hoặc mật khẩu không chính xác' });
     }
-    
+
     // Kiểm tra mật khẩu
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
       return res.status(400).json({ message: 'Tên đăng nhập hoặc mật khẩu không chính xác' });
     }
-    
+
     // Tạo JWT token
     const token = jwt.sign(
       { userId: user._id, username: user.username, role: user.role },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
-    
+
     res.json({
       message: 'Đăng nhập thành công',
       token,
@@ -259,7 +275,7 @@ app.put('/books/:id', authenticateToken, upload.single('coverImage'), async (req
   try {
     const { id } = req.params;
     const updateData = { ...req.body };
-    
+
     if (req.file) {
       updateData.coverImage = '/uploads/' + req.file.filename;
     }
@@ -286,12 +302,12 @@ app.get('/books/:id', async (req, res) => {
   try {
     // Thử tìm theo MongoDB _id trước
     let book = await Book.findById(req.params.id);
-    
+
     // Nếu không tìm thấy, thử tìm theo trường id tùy chỉnh
     if (!book) {
       book = await Book.findOne({ id: req.params.id });
     }
-    
+
     if (!book) return res.status(404).json({ message: 'Book not found' });
     res.status(200).json(book);
   } catch (error) {
@@ -322,7 +338,16 @@ app.get('/', (req, res) => {
   res.send('Welcome to the Books API!');
 });
 
+// Thêm middleware xử lý lỗi
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({
+    message: 'Something broke!',
+    error: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error'
+  });
+});
+
 // Khởi động server
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server is running on https://reactappserver-production.up.railway.app`);
 });
